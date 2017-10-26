@@ -459,6 +459,8 @@ public:
             {
               unsigned char buffer[1024];
               r = libusb_get_string_descriptor_ascii(dev_handle, dev_desc.iSerialNumber, buffer, sizeof(buffer));
+              // keep the ref until determined not kinect
+              libusb_ref_device(dev);
               libusb_close(dev_handle);
 
               if(r > LIBUSB_SUCCESS)
@@ -474,6 +476,7 @@ public:
               }
               else
               {
+                libusb_unref_device(dev);
                 LOG_ERROR << "failed to get serial number of Kinect v2: " << PrintBusAndDevice(dev, r);
               }
             }
@@ -603,7 +606,7 @@ void Freenect2DeviceImpl::setIrCameraParams(const Freenect2Device::IrCameraParam
 
 Freenect2Device::Config::Config() :
   MinDepth(0.5f),
-  MaxDepth(4.5f),
+  MaxDepth(4.5f), //set to > 8000 for best performance when using the kde pipeline
   EnableBilateralFilter(true),
   EnableEdgeAwareFilter(true) {}
 
@@ -898,31 +901,46 @@ bool Freenect2DeviceImpl::close()
   return true;
 }
 
-PacketPipeline *createDefaultPacketPipeline()
+PacketPipeline *createPacketPipelineByName(std::string name)
 {
-  const char *pipeline_type_env;
-  // GL, CL, CUDA, CPU
-  pipeline_type_env = std::getenv("LIBFREENECT2_PIPELINE");
-  std::string pipeline_type;
-
-  if (pipeline_type_env)
-    pipeline_type = std::string(pipeline_type_env);
-
 #if defined(LIBFREENECT2_WITH_OPENGL_SUPPORT)
-  if (pipeline_type == "GL")
+  if (name == "gl")
     return new OpenGLPacketPipeline();
 #endif
 #if defined(LIBFREENECT2_WITH_CUDA_SUPPORT)
-  if (pipeline_type == "CUDA")
+  if (name == "cuda")
     return new CudaPacketPipeline();
 #endif
 #if defined(LIBFREENECT2_WITH_OPENCL_SUPPORT)
-  if (pipeline_type == "CL")
+  if (name == "cl")
     return new OpenCLPacketPipeline();
 #endif
+  if (name == "cpu")
+    return new CpuPacketPipeline();
+  return NULL;
+}
 
-  // pipeline_type == "CPU" would be the default
+PacketPipeline *createDefaultPacketPipeline()
+{
+  const char *pipeline_env = std::getenv("LIBFREENECT2_PIPELINE");
+  if (pipeline_env)
+  {
+    PacketPipeline *pipeline = createPacketPipelineByName(pipeline_env);
+    if (pipeline)
+      return pipeline;
+    else
+      LOG_WARNING << "`" << pipeline_env << "' pipeline is not available.";
+  }
+
+#if defined(LIBFREENECT2_WITH_OPENGL_SUPPORT)
+  return new OpenGLPacketPipeline();
+#elif defined(LIBFREENECT2_WITH_CUDA_SUPPORT)
+  return new CudaPacketPipeline();
+#elif defined(LIBFREENECT2_WITH_OPENCL_SUPPORT)
+  return new OpenCLPacketPipeline();
+#else
   return new CpuPacketPipeline();
+#endif
 }
 
 Freenect2::Freenect2(void *usb_context) :
@@ -991,7 +1009,17 @@ Freenect2Device *Freenect2Impl::openDevice(int idx, const PacketPipeline *pipeli
     return device;
   }
 
-  int r = libusb_open(dev.dev, &dev_handle);
+  int r;
+  for (int i = 0; i < 10; i++)
+  {
+    r = libusb_open(dev.dev, &dev_handle);
+    if(r == LIBUSB_SUCCESS)
+    {
+      break;
+    }
+    LOG_INFO << "device unavailable right now, retrying";
+    this_thread::sleep_for(chrono::milliseconds(100));
+  }
 
   if(r != LIBUSB_SUCCESS)
   {
@@ -1005,7 +1033,7 @@ Freenect2Device *Freenect2Impl::openDevice(int idx, const PacketPipeline *pipeli
   {
     r = libusb_reset_device(dev_handle);
 
-    if(r == LIBUSB_ERROR_NOT_FOUND) 
+    if(r == LIBUSB_ERROR_NOT_FOUND)
     {
       // From libusb documentation:
       // "If the reset fails, the descriptors change, or the previous state

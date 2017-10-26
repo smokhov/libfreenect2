@@ -20,13 +20,14 @@ popd
 rmdir /s /q build
 mkdir build
 cd build
-cmake ..\.. -G "Visual Studio %vs_ver% %vs_year% Win64"
+cmake ..\.. -G "Visual Studio %vs_ver% %vs_year% Win64" -DENABLE_OPENCL=OFF -DENABLE_CUDA=OFF
 cmake --build . --config Release --target install
 
 rmdir /s /q install\lib\cmake
 rmdir /s /q install\lib\pkgconfig
 copy ..\LICENSES.txt install
 copy ..\INSTALL-windows.txt install
+copy ..\..\CONTRIB install
 cd ..
 rmdir /s /q libfreenect2-%ver%-vs%vs_year%-x64
 move build\install libfreenect2-%ver%-vs%vs_year%-x64

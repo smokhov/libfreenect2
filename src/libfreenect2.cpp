@@ -32,6 +32,7 @@
 #include <libusb.h>
 #include <limits>
 #include <cmath>
+#include <cstdlib>
 #include <dirent.h>
 #include <iostream>
 #include <fstream>

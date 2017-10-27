@@ -27,6 +27,7 @@
 /** @file Protonect.cpp Main application file. */
 
 #include <iostream>
+#include <cstdlib>
 #include <signal.h>
 
 /// [headers]
@@ -112,7 +113,9 @@ int main(int argc, char *argv[])
   std::string program_path(argv[0]);
   std::cerr << "Version: " << LIBFREENECT2_VERSION << std::endl;
   std::cerr << "Environment variables: LOGFILE=<protonect.log>" << std::endl;
-  std::cerr << "Usage: " << program_path << " [gl | cl | cpu] [<device serial>] [-noviewer] [-help] [-version]" << std::endl;
+  std::cerr << "Usage: " << program_path << " [-gpu=<id>] [gl | cl | clkde | cuda | cudakde | cpu] [<device serial>]" << std::endl;
+  std::cerr << "        [-noviewer] [-norgb | -nodepth] [-help] [-version]" << std::endl;
+  std::cerr << "        [-frames <number of frames to process>]" << std::endl;
   std::cerr << "To pause and unpause: pkill -USR1 Protonect" << std::endl;
   size_t executable_name_idx = program_path.rfind("Protonect");
 
@@ -149,6 +152,10 @@ int main(int argc, char *argv[])
   std::string serial = "";
 
   bool viewer_enabled = true;
+  bool enable_rgb = true;
+  bool enable_depth = true;
+  int deviceId = -1;
+  size_t framemax = -1;
 
   for(int argI = 1; argI < argc; ++argI)
   {
@@ -158,6 +165,15 @@ int main(int argc, char *argv[])
     {
       // Just let the initial lines display at the beginning of main
       return 0;
+    }
+    else if(arg.find("-gpu=") == 0)
+    {
+      if (pipeline)
+      {
+        std::cerr << "-gpu must be specified before pipeline argument" << std::endl;
+        return -1;
+      }
+      deviceId = atoi(argv[argI] + 5);
     }
     else if(arg == "cpu")
     {
@@ -179,9 +195,36 @@ int main(int argc, char *argv[])
     {
 #ifdef LIBFREENECT2_WITH_OPENCL_SUPPORT
       if(!pipeline)
-        pipeline = new libfreenect2::OpenCLPacketPipeline();
+        pipeline = new libfreenect2::OpenCLPacketPipeline(deviceId);
 #else
       std::cout << "OpenCL pipeline is not supported!" << std::endl;
+#endif
+    }
+    else if(arg == "clkde")
+    {
+#ifdef LIBFREENECT2_WITH_OPENCL_SUPPORT
+      if(!pipeline)
+        pipeline = new libfreenect2::OpenCLKdePacketPipeline(deviceId);
+#else
+      std::cout << "OpenCL pipeline is not supported!" << std::endl;
+#endif
+    }
+    else if(arg == "cuda")
+    {
+#ifdef LIBFREENECT2_WITH_CUDA_SUPPORT
+      if(!pipeline)
+        pipeline = new libfreenect2::CudaPacketPipeline(deviceId);
+#else
+      std::cout << "CUDA pipeline is not supported!" << std::endl;
+#endif
+    }
+    else if(arg == "cudakde")
+    {
+#ifdef LIBFREENECT2_WITH_CUDA_SUPPORT
+      if(!pipeline)
+        pipeline = new libfreenect2::CudaKdePacketPipeline(deviceId);
+#else
+      std::cout << "CUDA pipeline is not supported!" << std::endl;
 #endif
     }
     else if(arg.find_first_not_of("0123456789") == std::string::npos) //check if parameter could be a serial number
@@ -192,10 +235,33 @@ int main(int argc, char *argv[])
     {
       viewer_enabled = false;
     }
+    else if(arg == "-norgb" || arg == "--norgb")
+    {
+      enable_rgb = false;
+    }
+    else if(arg == "-nodepth" || arg == "--nodepth")
+    {
+      enable_depth = false;
+    }
+    else if(arg == "-frames")
+    {
+      ++argI;
+      framemax = strtol(argv[argI], NULL, 0);
+      if (framemax == 0) {
+        std::cerr << "invalid frame count '" << argv[argI] << "'" << std::endl;
+        return -1;
+      }
+    }
     else
     {
       std::cout << "Unknown argument: " << arg << std::endl;
     }
+  }
+
+  if (!enable_rgb && !enable_depth)
+  {
+    std::cerr << "Disabling both streams is not allowed!" << std::endl;
+    return -1;
   }
 
 /// [discovery]
@@ -237,7 +303,12 @@ int main(int argc, char *argv[])
   protonect_shutdown = false;
 
 /// [listeners]
-  libfreenect2::SyncMultiFrameListener listener(libfreenect2::Frame::Color | libfreenect2::Frame::Ir | libfreenect2::Frame::Depth);
+  int types = 0;
+  if (enable_rgb)
+    types |= libfreenect2::Frame::Color;
+  if (enable_depth)
+    types |= libfreenect2::Frame::Ir | libfreenect2::Frame::Depth;
+  libfreenect2::SyncMultiFrameListener listener(types);
   libfreenect2::FrameMap frames;
 
   dev->setColorFrameListener(&listener);
@@ -245,7 +316,16 @@ int main(int argc, char *argv[])
 /// [listeners]
 
 /// [start]
-  dev->start();
+  if (enable_rgb && enable_depth)
+  {
+    if (!dev->start())
+      return -1;
+  }
+  else
+  {
+    if (!dev->startStreams(enable_rgb, enable_depth))
+      return -1;
+  }
 
   std::cout << "device serial: " << dev->getSerialNumber() << std::endl;
   std::cout << "device firmware: " << dev->getFirmwareVersion() << std::endl;
@@ -266,17 +346,24 @@ int main(int argc, char *argv[])
 #endif
 
 /// [loop start]
-  while(!protonect_shutdown)
+  while(!protonect_shutdown && (framemax == (size_t)-1 || framecount < framemax))
   {
-    listener.waitForNewFrame(frames);
+    if (!listener.waitForNewFrame(frames, 10*1000)) // 10 sconds
+    {
+      std::cout << "timeout!" << std::endl;
+      return -1;
+    }
     libfreenect2::Frame *rgb = frames[libfreenect2::Frame::Color];
     libfreenect2::Frame *ir = frames[libfreenect2::Frame::Ir];
     libfreenect2::Frame *depth = frames[libfreenect2::Frame::Depth];
 /// [loop start]
 
+    if (enable_rgb && enable_depth)
+    {
 /// [registration]
-    registration->apply(rgb, depth, &undistorted, &registered);
+      registration->apply(rgb, depth, &undistorted, &registered);
 /// [registration]
+    }
 
     framecount++;
     if (!viewer_enabled)
@@ -288,10 +375,19 @@ int main(int argc, char *argv[])
     }
 
 #ifdef EXAMPLES_WITH_OPENGL_SUPPORT
-    viewer.addFrame("RGB", rgb);
-    viewer.addFrame("ir", ir);
-    viewer.addFrame("depth", depth);
-    viewer.addFrame("registered", &registered);
+    if (enable_rgb)
+    {
+      viewer.addFrame("RGB", rgb);
+    }
+    if (enable_depth)
+    {
+      viewer.addFrame("ir", ir);
+      viewer.addFrame("depth", depth);
+    }
+    if (enable_rgb && enable_depth)
+    {
+      viewer.addFrame("registered", &registered);
+    }
 
     protonect_shutdown = protonect_shutdown || viewer.render();
 #endif

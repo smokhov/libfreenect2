@@ -125,7 +125,7 @@ public:
     bool EnableEdgeAwareFilter; ///< Remove pixels on edges because ToF cameras produce noisy edges.
 
     /** Default is 0.5, 4.5, true, true */
-    Config();
+    LIBFREENECT2_API Config();
   };
 
   virtual ~Freenect2Device();
@@ -163,24 +163,33 @@ public:
   /** Provide your listener to receive IR and depth frames. */
   virtual void setIrAndDepthFrameListener(FrameListener* ir_frame_listener) = 0;
 
-  /** Start data processing.
+  /** Start data processing with both RGB and depth streams.
    * All above configuration must only be called before start() or after stop().
    *
    * FrameListener will receive frames when the device is running.
    *
-   * @return Undefined. To be defined in 0.2.
+   * @return true if ok, false if error.
    */
   virtual bool start() = 0;
 
+  /** Start data processing with or without some streams.
+   * FrameListener will receive enabled frames when the device is running.
+   *
+   * @param rgb Whether to enable RGB stream.
+   * @param depth Whether to enable depth stream.
+   * @return true if ok, false if error.
+   */
+  virtual bool startStreams(bool rgb, bool depth) = 0;
+
   /** Stop data processing.
    *
-   * @return Undefined. To be defined in 0.2.
+   * @return true if ok, false if error.
    */
   virtual bool stop() = 0;
 
   /** Shut down the device.
    *
-   * @return Undefined. To be defined in 0.2.
+   * @return true if ok, false if error.
    */
   virtual bool close() = 0;
 };
@@ -263,6 +272,10 @@ public:
   Freenect2Device *openDefaultDevice(const PacketPipeline *factory);
 private:
   Freenect2Impl *impl_;
+
+  /* Disable copy and assignment constructors */
+  Freenect2(const Freenect2&);
+  Freenect2& operator=(const Freenect2&);
 };
 
 class LIBFREENECT2_API Freenect2ReplayDevice {

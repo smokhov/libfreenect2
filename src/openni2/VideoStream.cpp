@@ -76,9 +76,10 @@ void VideoStream::raisePropertyChanged(int propertyId, const void* data, int dat
     StreamBase::raisePropertyChanged(propertyId, data, dataSize);
 }
 
-VideoStream::VideoStream(libfreenect2::Freenect2Device* device, Freenect2Driver::Registration *reg) :
+VideoStream::VideoStream(Device* drvdev, libfreenect2::Freenect2Device* device, Freenect2Driver::Registration *reg) :
   frame_id(1),
   device(device),
+  driver_dev(drvdev),
   running(false),
   mirroring(false),
   reg(reg),
@@ -147,10 +148,15 @@ bool VideoStream::buildFrame(libfreenect2::Frame* lf2Frame)
 
 OniStatus VideoStream::start()
 {
+  driver_dev->start();
   running = true;
   return ONI_STATUS_OK;
 }
-void VideoStream::stop() { running = false; }
+void VideoStream::stop()
+{
+  driver_dev->stop();
+  running = false;
+}
 
 // only add to property handlers if the property is generic to all children
 // otherwise, implement in child and call these in default case
@@ -260,14 +266,27 @@ OniStatus VideoStream::setProperty(int propertyId, const void* data, int dataSiz
         LogError("Unexpected size for ONI_STREAM_PROPERTY_MIRRORING");
         return ONI_STATUS_ERROR;
       }
-      mirroring = *(static_cast<const OniBool*>(data));
+      mirroring = !!*(static_cast<const OniBool*>(data));
       raisePropertyChanged(propertyId, data, dataSize);
       return ONI_STATUS_OK;
   }
 }
 
+OniStatus VideoStream::convertDepthToColorCoordinates(StreamBase* colorStream, int depthX, int depthY, OniDepthPixel depthZ, int* pColorX, int* pColorY)
+{
+  if (!reg)
+  {
+    return ONI_STATUS_NOT_SUPPORTED;
+  }
 
-/* todo : from StreamBase
-virtual OniStatus convertDepthToColorCoordinates(StreamBase* colorStream, int depthX, int depthY, OniDepthPixel depthZ, int* pColorX, int* pColorY) { return ONI_STATUS_NOT_SUPPORTED; }
-*/
+  float cx, cy;
+  const float dz = depthZ;
+  reg->depthToColor(depthX, depthY, dz, cx, cy);
+
+  *pColorX = cx;
+  *pColorY = cy;
+
+  return ONI_STATUS_OK;
+}
+
 }

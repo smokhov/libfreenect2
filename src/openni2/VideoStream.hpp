@@ -34,6 +34,13 @@
 
 namespace Freenect2Driver
 {
+  class Device : public oni::driver::DeviceBase
+  {
+  public:
+    virtual void start() = 0;
+    virtual void stop() = 0;
+  };
+
   class VideoStream : public oni::driver::StreamBase
   {
   private:
@@ -43,6 +50,7 @@ namespace Freenect2Driver
   protected:
     virtual OniSensorType getSensorType() const = 0;
     libfreenect2::Freenect2Device* device;
+    Device* driver_dev;
     bool running; // buildFrame() does something iff true
     OniVideoMode video_mode;
     OniCropping cropping;
@@ -58,7 +66,7 @@ namespace Freenect2Driver
     void raisePropertyChanged(int propertyId, const void* data, int dataSize);
 
   public:
-    VideoStream(libfreenect2::Freenect2Device* device, Freenect2Driver::Registration *reg);
+    VideoStream(Device* driver_dev, libfreenect2::Freenect2Device* device, Freenect2Driver::Registration *reg);
 
     OniSensorInfo getSensorInfo();
 
@@ -76,8 +84,7 @@ namespace Freenect2Driver
     virtual OniStatus getProperty(int propertyId, void* data, int* pDataSize);
     virtual OniStatus setProperty(int propertyId, const void* data, int dataSize);
 
-    /* todo : from StreamBase
-    virtual OniStatus convertDepthToColorCoordinates(StreamBase* colorStream, int depthX, int depthY, OniDepthPixel depthZ, int* pColorX, int* pColorY) { return ONI_STATUS_NOT_SUPPORTED; }
-    */
+    virtual OniStatus convertDepthToColorCoordinates(StreamBase* colorStream, int depthX, int depthY, OniDepthPixel depthZ, int* pColorX, int* pColorY);
+
   };
 }

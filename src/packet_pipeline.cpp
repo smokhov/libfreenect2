@@ -31,9 +31,35 @@
 #include <libfreenect2/data_callback.h>
 #include <libfreenect2/rgb_packet_stream_parser.h>
 #include <libfreenect2/depth_packet_stream_parser.h>
+#include <libfreenect2/protocol/response.h>
 
 namespace libfreenect2
 {
+
+static RgbPacketProcessor *getDefaultRgbPacketProcessor()
+{
+#if defined(LIBFREENECT2_WITH_VT_SUPPORT)
+  return new VTRgbPacketProcessor();
+#elif defined(LIBFREENECT2_WITH_VAAPI_SUPPORT)
+  RgbPacketProcessor *vaapi = new VaapiRgbPacketProcessor();
+  if (vaapi->good())
+    return vaapi;
+  else
+    delete vaapi;
+  return new TurboJpegRgbPacketProcessor();
+#elif defined(LIBFREENECT2_WITH_TEGRAJPEG_SUPPORT)
+  RgbPacketProcessor *tegra = new TegraJpegRgbPacketProcessor();
+  if (tegra->good())
+    return tegra;
+  else
+    delete tegra;
+  return new TurboJpegRgbPacketProcessor();
+#elif defined(LIBFREENECT2_WITH_TURBOJPEG_SUPPORT)
+  return new TurboJpegRgbPacketProcessor();
+#else
+  #error No jpeg decoder is enabled
+#endif
+}
 
 class PacketPipelineComponents
 {
@@ -103,16 +129,16 @@ DepthPacketProcessor *PacketPipeline::getDepthPacketProcessor() const
 }
 
 CpuPacketPipeline::CpuPacketPipeline()
-{ 
-  comp_->initialize(new TurboJpegRgbPacketProcessor(), new CpuDepthPacketProcessor());
+{
+  comp_->initialize(getDefaultRgbPacketProcessor(), new CpuDepthPacketProcessor());
 }
 
 CpuPacketPipeline::~CpuPacketPipeline() { }
 
 #ifdef LIBFREENECT2_WITH_OPENGL_SUPPORT
 OpenGLPacketPipeline::OpenGLPacketPipeline(void *parent_opengl_context, bool debug) : parent_opengl_context_(parent_opengl_context), debug_(debug)
-{ 
-  comp_->initialize(new TurboJpegRgbPacketProcessor(), new OpenGLDepthPacketProcessor(parent_opengl_context_, debug_));
+{
+  comp_->initialize(getDefaultRgbPacketProcessor(), new OpenGLDepthPacketProcessor(parent_opengl_context_, debug_));
 }
 
 OpenGLPacketPipeline::~OpenGLPacketPipeline() { }
@@ -120,14 +146,37 @@ OpenGLPacketPipeline::~OpenGLPacketPipeline() { }
 
 
 #ifdef LIBFREENECT2_WITH_OPENCL_SUPPORT
-
 OpenCLPacketPipeline::OpenCLPacketPipeline(const int deviceId) : deviceId(deviceId)
-{ 
-  comp_->initialize(new TurboJpegRgbPacketProcessor(), new OpenCLDepthPacketProcessor(deviceId));
+{
+  comp_->initialize(getDefaultRgbPacketProcessor(), new OpenCLDepthPacketProcessor(deviceId));
 }
 
 OpenCLPacketPipeline::~OpenCLPacketPipeline() { }
+
+
+OpenCLKdePacketPipeline::OpenCLKdePacketPipeline(const int deviceId) : deviceId(deviceId)
+{
+  comp_->initialize(getDefaultRgbPacketProcessor(), new OpenCLKdeDepthPacketProcessor(deviceId));
+}
+
+OpenCLKdePacketPipeline::~OpenCLKdePacketPipeline() { }
 #endif // LIBFREENECT2_WITH_OPENCL_SUPPORT
+
+#ifdef LIBFREENECT2_WITH_CUDA_SUPPORT
+CudaPacketPipeline::CudaPacketPipeline(const int deviceId) : deviceId(deviceId)
+{
+  comp_->initialize(getDefaultRgbPacketProcessor(), new CudaDepthPacketProcessor(deviceId));
+}
+
+CudaKdePacketPipeline::~CudaKdePacketPipeline() { }
+
+CudaKdePacketPipeline::CudaKdePacketPipeline(const int deviceId) : deviceId(deviceId)
+{
+  comp_->initialize(getDefaultRgbPacketProcessor(), new CudaKdeDepthPacketProcessor(deviceId));
+}
+
+CudaPacketPipeline::~CudaPacketPipeline() { }
+#endif // LIBFREENECT2_WITH_CUDA_SUPPORT
 
 DumpPacketPipeline::DumpPacketPipeline()
 {
@@ -137,5 +186,25 @@ DumpPacketPipeline::DumpPacketPipeline()
 }
 
 DumpPacketPipeline::~DumpPacketPipeline() {}
+
+const unsigned char* DumpPacketPipeline::getDepthP0Tables(size_t* length) {
+  *length = sizeof(libfreenect2::protocol::P0TablesResponse);
+  return static_cast<DumpDepthPacketProcessor*>(getDepthPacketProcessor())->getP0Tables();
+}
+
+const float* DumpPacketPipeline::getDepthXTable(size_t* length) {
+  *length = DepthPacketProcessor::TABLE_SIZE;
+  return static_cast<DumpDepthPacketProcessor*>(getDepthPacketProcessor())->getXTable();
+}
+
+const float* DumpPacketPipeline::getDepthZTable(size_t* length) {
+  *length = DepthPacketProcessor::TABLE_SIZE;
+  return static_cast<DumpDepthPacketProcessor*>(getDepthPacketProcessor())->getZTable();
+}
+
+const short* DumpPacketPipeline::getDepthLookupTable(size_t* length) {
+  *length = DepthPacketProcessor::LUT_SIZE;
+  return static_cast<DumpDepthPacketProcessor*>(getDepthPacketProcessor())->getLookupTable();
+}
 
 } /* namespace libfreenect2 */

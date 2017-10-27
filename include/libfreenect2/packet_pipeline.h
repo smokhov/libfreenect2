@@ -31,6 +31,8 @@
 
 #include <libfreenect2/config.h>
 
+#include <stdlib.h>
+
 namespace libfreenect2
 {
 
@@ -71,6 +73,13 @@ protected:
  public:
    DumpPacketPipeline();
    virtual ~DumpPacketPipeline();
+
+   // These are all required to decode depth data
+   const unsigned char* getDepthP0Tables(size_t* length);
+
+   const float* getDepthXTable(size_t* length);
+   const float* getDepthZTable(size_t* length);
+   const short* getDepthLookupTable(size_t* length);
  };
 
 /** Pipeline with CPU depth processing. */
@@ -104,7 +113,48 @@ public:
   OpenCLPacketPipeline(const int deviceId = -1);
   virtual ~OpenCLPacketPipeline();
 };
+
+/*
+ * The class below implement a depth packet processor using the phase unwrapping
+ * algorithm described in the paper "Efficient Phase Unwrapping using Kernel
+ * Density Estimation", ECCV 2016, Felix Järemo Lawin, Per-Erik Forssen and
+ * Hannes Ovren, see http://www.cvl.isy.liu.se/research/datasets/kinect2-dataset/.
+ */
+class LIBFREENECT2_API OpenCLKdePacketPipeline : public PacketPipeline
+{
+protected:
+  const int deviceId;
+public:
+  OpenCLKdePacketPipeline(const int deviceId = -1);
+  virtual ~OpenCLKdePacketPipeline();
+};
 #endif // LIBFREENECT2_WITH_OPENCL_SUPPORT
+
+#ifdef LIBFREENECT2_WITH_CUDA_SUPPORT
+class LIBFREENECT2_API CudaPacketPipeline : public PacketPipeline
+{
+protected:
+  const int deviceId;
+public:
+  CudaPacketPipeline(const int deviceId = -1);
+  virtual ~CudaPacketPipeline();
+};
+
+/*
+ * The class below implement a depth packet processor using the phase unwrapping
+ * algorithm described in the paper "Efficient Phase Unwrapping using Kernel
+ * Density Estimation", ECCV 2016, Felix Järemo Lawin, Per-Erik Forssen and
+ * Hannes Ovren, see http://www.cvl.isy.liu.se/research/datasets/kinect2-dataset/.
+ */
+class LIBFREENECT2_API CudaKdePacketPipeline : public PacketPipeline
+{
+protected:
+  const int deviceId;
+public:
+  CudaKdePacketPipeline(const int deviceId = -1);
+  virtual ~CudaKdePacketPipeline();
+};
+#endif // LIBFREENECT2_WITH_CUDA_SUPPORT
 
 ///@}
 } /* namespace libfreenect2 */

@@ -33,6 +33,8 @@
 #include <limits>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
+
 #define WRITE_LIBUSB_ERROR(__RESULT) libusb_error_name(__RESULT) << " " << libusb_strerror((libusb_error)__RESULT)
 
 #include <libfreenect2/libfreenect2.hpp>
@@ -46,6 +48,7 @@
 #include <libfreenect2/protocol/response.h>
 #include <libfreenect2/protocol/command_transaction.h>
 #include <libfreenect2/logging.h>
+#include <libfreenect2/threading.h>
 
 namespace libfreenect2
 {
@@ -256,6 +259,52 @@ public:
   virtual bool startStreams(bool rgb, bool depth);
   virtual bool stop();
   virtual bool close();
+};
+
+class LIBFREENECT2_API Freenect2ReplayDevice : public Freenect2Device
+{
+public:
+  Freenect2ReplayDevice(std::vector<std::string>& frame_filenames, PacketPipeline* pipeline);
+ 
+  virtual std::string getSerialNumber();
+  virtual std::string getFirmwareVersion();
+
+  virtual ColorCameraParams getColorCameraParams();
+  virtual IrCameraParams getIrCameraParams();
+
+  virtual void setColorCameraParams(const ColorCameraParams &params);
+  virtual void setIrCameraParams(const IrCameraParams &params);
+
+  void setColorFrameListener(FrameListener* listener);
+  void setIrAndDepthFrameListener(FrameListener* listener);
+
+  virtual void setConfiguration(const Config &config);
+  
+  virtual bool start();
+  virtual bool startStreams(bool rgb, bool depth);
+  virtual bool stop();
+
+  void loadP0Tables(unsigned char* buffer, size_t buffer_length);
+  void loadXZTables(const float *xtable, const float *ztable);
+  void loadLookupTable(const short *lut);
+
+private:
+  bool processRawFrame(Frame::Type type, Frame* frame);  
+
+  virtual void run();
+  static void static_execute(void* arg);
+  
+protected:
+  void processRgbFrame(Frame* frame);
+  void processDepthFrame(Frame* frame);
+
+private:
+  PacketPipeline* pipeline_;
+  std::vector<std::string> frame_filenames_;
+  libfreenect2::thread* t_;
+  bool running_;
+  Freenect2Device::IrCameraParams ir_camera_params_;
+  Freenect2Device::ColorCameraParams rgb_camera_params_;
 };
 
 struct PrintBusAndDevice
@@ -1113,6 +1162,232 @@ Freenect2Device *Freenect2::openDefaultDevice()
 Freenect2Device *Freenect2::openDefaultDevice(const PacketPipeline *pipeline)
 {
   return openDevice(0, pipeline);
+}
+
+Freenect2ReplayDevice::Freenect2ReplayDevice(std::vector<std::string>& frame_filenames, PacketPipeline* pipeline) 
+  :pipeline_(pipeline), frame_filenames_(frame_filenames), running_(false)
+{
+}
+
+std::string Freenect2ReplayDevice::getSerialNumber()
+{
+  // Reasonable assumption given it is a software serial for apps that display this
+  return LIBFREENECT2_VERSION;
+}
+
+std::string Freenect2ReplayDevice::getFirmwareVersion()
+{
+  // Reasonable assumption given it is a software serial for apps that display this
+  return LIBFREENECT2_VERSION;
+}
+
+Freenect2Device::ColorCameraParams Freenect2ReplayDevice::getColorCameraParams()
+{
+  return rgb_camera_params_;
+}
+
+Freenect2Device::IrCameraParams Freenect2ReplayDevice::getIrCameraParams()
+{
+  return ir_camera_params_;
+}
+
+void Freenect2ReplayDevice::setColorCameraParams(const Freenect2Device::ColorCameraParams &params)
+{
+  rgb_camera_params_ = params;
+}
+
+void Freenect2ReplayDevice::setIrCameraParams(const Freenect2Device::IrCameraParams &params)
+{
+  ir_camera_params_ = params;
+  DepthPacketProcessor *proc = pipeline_->getDepthPacketProcessor();
+  if (proc != 0)
+  {
+    IrCameraTables tables(params);
+    proc->loadXZTables(&tables.xtable[0], &tables.ztable[0]);
+    proc->loadLookupTable(&tables.lut[0]);
+  }
+}
+
+void Freenect2ReplayDevice::setConfiguration(const Freenect2Device::Config &config)
+{
+  DepthPacketProcessor *proc = pipeline_->getDepthPacketProcessor();
+  if (proc != 0)
+    proc->setConfiguration(config);
+}
+
+void Freenect2ReplayDevice::setColorFrameListener(FrameListener* listener)
+{
+  RgbPacketProcessor* proc = pipeline_->getRgbPacketProcessor();
+  if (proc != NULL)
+  {
+    proc->setFrameListener(listener);
+  }
+}
+
+void Freenect2ReplayDevice::setIrAndDepthFrameListener(FrameListener* listener)
+{
+  DepthPacketProcessor* proc = pipeline_->getDepthPacketProcessor();
+  if (proc != NULL)
+  {
+    proc->setFrameListener(listener);
+  }
+}
+
+bool Freenect2ReplayDevice::processRawFrame(Frame::Type type, Frame* frame)
+{
+  if (frame->format != Frame::Raw)
+  {
+    return false;
+  }
+  switch (type)
+  {
+  case Frame::Color:
+    processRgbFrame(frame);
+    break;
+  case Frame::Depth:
+    processDepthFrame(frame);
+    break;
+  default:
+    return false;
+  }
+  return true;
+}
+
+void Freenect2ReplayDevice::processRgbFrame(Frame* frame)
+{
+  RgbPacket packet;
+  packet.timestamp = frame->timestamp;
+  packet.sequence = frame->sequence;
+  packet.jpeg_buffer = frame->data;
+  packet.jpeg_buffer_length = frame->bytes_per_pixel;
+  packet.exposure = frame->exposure;
+  packet.gain = frame->gain;
+  packet.gamma = frame->gamma;
+
+  pipeline_->getRgbPacketProcessor()->process(packet);
+}
+
+void Freenect2ReplayDevice::processDepthFrame(Frame* frame)
+{
+  DepthPacket packet;
+  packet.timestamp = frame->timestamp;
+  packet.sequence = frame->sequence;
+  packet.buffer = frame->data;
+  packet.buffer_length = frame->bytes_per_pixel;
+ 
+  pipeline_->getDepthPacketProcessor()->process(packet);
+}
+
+void Freenect2ReplayDevice::loadP0Tables(unsigned char* buffer, size_t buffer_length)
+{
+  pipeline_->getDepthPacketProcessor()->loadP0TablesFromCommandResponse(buffer, buffer_length);
+}
+
+void Freenect2ReplayDevice::loadXZTables(const float *xtable, const float *ztable)
+{
+  pipeline_->getDepthPacketProcessor()->loadXZTables(xtable, ztable);
+}
+
+void Freenect2ReplayDevice::loadLookupTable(const short *lut)
+{
+  pipeline_->getDepthPacketProcessor()->loadLookupTable(lut);
+}
+
+void Freenect2ReplayDevice::static_execute (void* arg)
+{
+  static_cast<Freenect2ReplayDevice*>(arg)->run();
+}
+
+bool Freenect2ReplayDevice::start()
+{
+  running_ = true;
+  t_ = new libfreenect2::thread(static_execute, this);
+  return running_;
+}
+
+bool Freenect2ReplayDevice::startStreams(bool enable_rgb, bool enable_depth)
+{
+  LOG_INFO << "Freenect2ReplayDevice: starting: rgb: " << enable_rgb << ", depth: " << enable_depth;
+  LOG_INFO << "Freenect2ReplayDevice: unimplemented";
+  return false;
+}
+
+bool Freenect2ReplayDevice::stop()
+{
+  running_ = false;
+  t_->join();
+  delete t_;
+  t_ = NULL;
+  return true;
+}
+
+bool hasSuffix(const std::string& str, const std::string& suffix)
+{
+  if (str.length() < suffix.length())
+  {
+    return false;
+  }
+  return str.compare(str.length() - suffix.length(), suffix.length(), suffix) == 0;
+}
+
+void Freenect2ReplayDevice::run()
+{
+  std::vector<std::string> frames = frame_filenames_;
+
+  for (size_t i = 0; i < frames.size() && running_; i++)
+  {
+    std::string frame = frames[i];
+
+    // TODO: document
+    size_t ix1 = frame.find("_");
+    size_t ix2 = frame.find("_", ix1 + 1);
+    size_t ix3 = frame.find(".", ix2 + 1);
+
+    std::string ts = frame.substr(0, ix1);
+    std::string seq = frame.substr(ix2 + 1, ix3);
+
+    std::string data;
+
+    if (hasSuffix(frame, ".depth"))
+    {
+      std::ifstream fd(frame.c_str());
+      
+      if(!fd)
+      {
+        LOG_ERROR << "failed to open replay frame: " << frame << std::endl;
+        continue;
+      }
+
+      fd.seekg(0, fd.end);
+      int length = fd.tellg();
+      fd.seekg(0, fd.beg);
+
+      DepthPacket packet;
+      
+      packet.timestamp = atoi(ts.c_str());
+      packet.sequence = atoi(seq.c_str());
+
+      packet.buffer_length = length;
+      std::vector<char> buffer;
+      buffer.reserve(length);
+      packet.buffer = reinterpret_cast<unsigned char*>(&buffer[0]);
+      fd.read(&buffer[0], length);
+      
+      if(!fd)
+      {
+        LOG_ERROR
+          << "failed to read replay frame: " << frame
+          << ": " << fd.gcount() << " vs. " << length << " bytes"
+          << std::endl;
+        fd.close();
+        continue;
+      }
+      
+      fd.close();
+
+      pipeline_->getDepthPacketProcessor()->process(packet);
+    }
+  }
 }
 
 } /* namespace libfreenect2 */
